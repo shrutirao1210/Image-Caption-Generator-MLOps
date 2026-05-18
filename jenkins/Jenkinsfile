@@ -18,7 +18,7 @@ pipeline {
         IMAGE_TAG = "build-${BUILD_NUMBER}"
         
         // Email configuration
-        EMAIL_RECIPIENTS = 'googloid111@gmail.com'
+        EMAIL_RECIPIENTS = 'shrutirao2808@gmail.com'
     }
 
     options {
