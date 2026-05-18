@@ -1,5 +1,6 @@
 apiVersion: apps/v1
 kind: Deployment
+
 metadata:
   name: backend-deployment
   namespace: spe-project
@@ -8,6 +9,7 @@ metadata:
 
 spec:
   replicas: 1
+
   selector:
     matchLabels:
       app: image-caption-backend
@@ -18,94 +20,137 @@ spec:
         app: image-caption-backend
 
     spec:
+
       imagePullSecrets:
         - name: regcred
 
       volumes:
-      - name: shared-model-cache-volume
-        persistentVolumeClaim:
-          claimName: shared-model-cache-pvc
+        - name: shared-model-cache-volume
+          persistentVolumeClaim:
+            claimName: shared-model-cache-pvc
 
       initContainers:
-      - name: init-caption-model-download
-        image: python:3.13-slim
-        env:
-          - name: HF_HOME
-            value: /model-cache/.cache/huggingface
-          - name: TRANSFORMERS_CACHE
-            value: /model-cache/.cache/huggingface
-        volumeMounts:
-        - name: shared-model-cache-volume
-          mountPath: /model-cache
-        command: ["/bin/sh", "-c"]
-        args:
-          - |
-            echo "Checking for caption model marker..."
-            MARKER_FILE="/model-cache/caption_model_downloaded.marker"
+        - name: init-caption-model-download
+          image: python:3.13-slim
 
-            if [ ! -f "$MARKER_FILE" ]; then
-              echo "Installing dependencies..."
+          env:
+            - name: HF_HOME
+              value: /model-cache/.cache/huggingface
 
-              apt-get update && \
-              apt-get install -y --no-install-recommends build-essential cmake pkg-config && \
-              rm -rf /var/lib/apt/lists/*
+            - name: TRANSFORMERS_CACHE
+              value: /model-cache/.cache/huggingface
 
-              pip install --no-cache-dir --root-user-action=ignore transformers torch huggingface_hub sentencepiece pillow
+          volumeMounts:
+            - name: shared-model-cache-volume
+              mountPath: /model-cache
 
-              echo "Downloading model..."
+          command:
+            - /bin/sh
+            - -c
 
-              python <<EOF
-import sys
-import os
-from transformers import VisionEncoderDecoderModel, ViTImageProcessor, AutoTokenizer
+          args:
+            - |
+              echo "Checking for caption model marker..."
 
-MODEL = "nlpconnect/vit-gpt2-image-captioning"
-CACHE_DIR = "/model-cache/.cache/huggingface"
+              MARKER_FILE="/model-cache/caption_model_downloaded.marker"
 
-print(f"Downloading {MODEL}...")
+              if [ ! -f "$MARKER_FILE" ]; then
 
-try:
-    os.makedirs(CACHE_DIR, exist_ok=True)
-    VisionEncoderDecoderModel.from_pretrained(MODEL, cache_dir=CACHE_DIR)
-    ViTImageProcessor.from_pretrained(MODEL, cache_dir=CACHE_DIR)
-    AutoTokenizer.from_pretrained(MODEL, cache_dir=CACHE_DIR)
-    print("Download successful")
-    sys.exit(0)
-except Exception as e:
-    print(f"ERROR: {e}")
-    sys.exit(1)
-EOF
+                echo "Installing dependencies..."
 
-              if [ $? -eq 0 ]; then
-                touch "$MARKER_FILE"
+                apt-get update && \
+                apt-get install -y --no-install-recommends build-essential cmake pkg-config && \
+                rm -rf /var/lib/apt/lists/*
+
+                pip install --no-cache-dir --root-user-action=ignore \
+                transformers \
+                torch \
+                huggingface_hub \
+                sentencepiece \
+                pillow
+
+                echo "Downloading model..."
+
+                python <<EOF
+                import sys
+                import os
+
+                from transformers import (
+                    VisionEncoderDecoderModel,
+                    ViTImageProcessor,
+                    AutoTokenizer
+                )
+
+                MODEL = "nlpconnect/vit-gpt2-image-captioning"
+                CACHE_DIR = "/model-cache/.cache/huggingface"
+
+                print(f"Downloading {MODEL}...")
+
+                try:
+                    os.makedirs(CACHE_DIR, exist_ok=True)
+
+                    VisionEncoderDecoderModel.from_pretrained(
+                        MODEL,
+                        cache_dir=CACHE_DIR
+                    )
+
+                    ViTImageProcessor.from_pretrained(
+                        MODEL,
+                        cache_dir=CACHE_DIR
+                    )
+
+                    AutoTokenizer.from_pretrained(
+                        MODEL,
+                        cache_dir=CACHE_DIR
+                    )
+
+                    print("Download successful")
+                    sys.exit(0)
+
+                except Exception as e:
+                    print(f"ERROR: {e}")
+                    sys.exit(1)
+
+                EOF
+
+                if [ $? -eq 0 ]; then
+                  touch "$MARKER_FILE"
+                else
+                  exit 1
+                fi
+
               else
-                exit 1
+                echo "Model already exists"
               fi
-            else
-              echo "Model already exists"
-            fi
 
-            echo "Init container finished"
+              echo "Init container finished"
 
       containers:
-      - name: backend
-        image: shrutimrao/caption:latest
-        imagePullPolicy: Always
-        ports:
-        - name: http-caption
-          containerPort: 8000
-        env:
-          - name: HF_HOME
-            value: /model-cache/.cache/huggingface
-          - name: TRANSFORMERS_CACHE
-            value: /model-cache/.cache/huggingface
-        volumeMounts:
-        - name: shared-model-cache-volume
-          mountPath: /model-cache
-        resources:
-          requests:
-            memory: "2Gi"
-            cpu: "500m"
-          limits:
-            memory: "4Gi"
-            cpu: "1000m"
+        - name: backend
+
+          image: shrutimrao/caption:latest
+          imagePullPolicy: IfNotPresent
+
+          ports:
+            - name: http-caption
+              containerPort: 8000
+
+          env:
+            - name: HF_HOME
+              value: /model-cache/.cache/huggingface
+
+            - name: TRANSFORMERS_CACHE
+              value: /model-cache/.cache/huggingface
+
+          volumeMounts:
+            - name: shared-model-cache-volume
+              mountPath: /model-cache
+
+          resources:
+            requests:
+              memory: "2Gi"
+              cpu: "500m"
+
+            limits:
+              memory: "4Gi"
+              cpu: "1000m"
