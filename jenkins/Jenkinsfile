@@ -11,6 +11,8 @@ pipeline {
         CAPTION_IMAGE_NAME = "${DOCKER_USERNAME}/caption"
         OBJECT_IMAGE_NAME = "${DOCKER_USERNAME}/object"
 
+        IMAGE_TAG = "build-${BUILD_NUMBER}"
+
         EMAIL_RECIPIENTS = 'shrutirao2808@gmail.com'
     }
 
@@ -49,7 +51,8 @@ pipeline {
             steps {
                 dir('frontend') {
                     sh """
-                    docker build -t ${FRONTEND_IMAGE_NAME}:latest -f Dockerfile .
+                    docker build -t ${FRONTEND_IMAGE_NAME}:${IMAGE_TAG} .
+                    docker tag ${FRONTEND_IMAGE_NAME}:${IMAGE_TAG} ${FRONTEND_IMAGE_NAME}:latest
                     """
                 }
             }
@@ -59,7 +62,8 @@ pipeline {
             steps {
                 dir('caption') {
                     sh """
-                    docker build -t ${CAPTION_IMAGE_NAME}:latest -f Dockerfile .
+                    docker build -t ${CAPTION_IMAGE_NAME}:${IMAGE_TAG} .
+                    docker tag ${CAPTION_IMAGE_NAME}:${IMAGE_TAG} ${CAPTION_IMAGE_NAME}:latest
                     """
                 }
             }
@@ -69,7 +73,8 @@ pipeline {
             steps {
                 dir('object') {
                     sh """
-                    docker build -t ${OBJECT_IMAGE_NAME}:latest -f Dockerfile .
+                    docker build -t ${OBJECT_IMAGE_NAME}:${IMAGE_TAG} .
+                    docker tag ${OBJECT_IMAGE_NAME}:${IMAGE_TAG} ${OBJECT_IMAGE_NAME}:latest
                     """
                 }
             }
@@ -87,13 +92,16 @@ pipeline {
                     sh '''
                     echo $DOCKER_PASS | docker login ${DOCKER_REGISTRY} -u $DOCKER_USER --password-stdin
 
-                    echo "Pushing frontend image"
+                    echo "Pushing frontend images"
+                    docker push ${FRONTEND_IMAGE_NAME}:${IMAGE_TAG}
                     docker push ${FRONTEND_IMAGE_NAME}:latest
 
-                    echo "Pushing caption image"
+                    echo "Pushing caption images"
+                    docker push ${CAPTION_IMAGE_NAME}:${IMAGE_TAG}
                     docker push ${CAPTION_IMAGE_NAME}:latest
 
-                    echo "Pushing object image"
+                    echo "Pushing object images"
+                    docker push ${OBJECT_IMAGE_NAME}:${IMAGE_TAG}
                     docker push ${OBJECT_IMAGE_NAME}:latest
                     '''
                 }
@@ -115,33 +123,53 @@ pipeline {
         stage('Deploy to Kubernetes') {
             steps {
 
-                sh "kubectl apply -f kubernetes/namespace.yaml"
+                script {
 
-                sh "kubectl apply -f kubernetes/shared-model.yaml"
+                    try {
 
-                sh "kubectl apply -f kubernetes/frontend-deployment.yaml"
-                sh "kubectl apply -f kubernetes/backend-deployment.yaml"
-                sh "kubectl apply -f kubernetes/object-detector-deployment.yaml"
+                        sh "kubectl apply -f kubernetes/namespace.yaml"
 
-                sh "kubectl apply -f kubernetes/frontend-service.yaml"
-                sh "kubectl apply -f kubernetes/backend-service.yaml"
-                sh "kubectl apply -f kubernetes/object-detector-service.yaml"
+                        sh "kubectl apply -f kubernetes/shared-model.yaml"
 
-                sh "kubectl apply -f kubernetes/ingress.yaml"
-                sh "kubectl apply -f kubernetes/monitoring-ingress.yaml"
-                sh "kubectl apply -f kubernetes/hpa.yaml"
+                        sh "kubectl apply -f kubernetes/frontend-deployment.yaml"
+                        sh "kubectl apply -f kubernetes/backend-deployment.yaml"
+                        sh "kubectl apply -f kubernetes/object-detector-deployment.yaml"
 
-                sh "kubectl apply -f kubernetes/app-servicemonitors.yaml"
-                sh "kubectl apply -f kubernetes/prometheus-config.yaml"
-                sh "kubectl apply -f kubernetes/grafana-config.yaml"
+                        sh "kubectl apply -f kubernetes/frontend-service.yaml"
+                        sh "kubectl apply -f kubernetes/backend-service.yaml"
+                        sh "kubectl apply -f kubernetes/object-detector-service.yaml"
 
-                sh """
-                kubectl rollout restart deployment/frontend-deployment -n ${K8S_NAMESPACE}
+                        sh "kubectl apply -f kubernetes/ingress.yaml"
+                        sh "kubectl apply -f kubernetes/monitoring-ingress.yaml"
+                        sh "kubectl apply -f kubernetes/hpa.yaml"
 
-                kubectl rollout restart deployment/backend-deployment -n ${K8S_NAMESPACE}
+                        sh """
+                        kubectl set image deployment/frontend-deployment frontend=${FRONTEND_IMAGE_NAME}:${IMAGE_TAG} -n ${K8S_NAMESPACE}
 
-                kubectl rollout restart deployment/object-detector-deployment -n ${K8S_NAMESPACE}
-                """
+                        kubectl set image deployment/backend-deployment backend=${CAPTION_IMAGE_NAME}:${IMAGE_TAG} -n ${K8S_NAMESPACE}
+
+                        kubectl set image deployment/object-detector-deployment object-detector=${OBJECT_IMAGE_NAME}:${IMAGE_TAG} -n ${K8S_NAMESPACE}
+                        """
+
+                        sh """
+                        kubectl rollout status deployment/frontend-deployment -n ${K8S_NAMESPACE} --timeout=5m
+
+                        kubectl rollout status deployment/backend-deployment -n ${K8S_NAMESPACE} --timeout=10m
+
+                        kubectl rollout status deployment/object-detector-deployment -n ${K8S_NAMESPACE} --timeout=5m
+                        """
+
+                    } catch (Exception e) {
+
+                        echo "Error during Kubernetes deployment: ${e.message}"
+
+                        sh "kubectl get pods -n ${K8S_NAMESPACE}"
+
+                        sh "kubectl describe pods -n ${K8S_NAMESPACE}"
+
+                        throw e
+                    }
+                }
             }
         }
     }
@@ -165,9 +193,9 @@ Pipeline ${env.JOB_NAME} build #${env.BUILD_NUMBER} was successful!
 Build URL: ${env.BUILD_URL}
 
 Docker Images:
-- ${FRONTEND_IMAGE_NAME}:latest
-- ${CAPTION_IMAGE_NAME}:latest
-- ${OBJECT_IMAGE_NAME}:latest
+- ${FRONTEND_IMAGE_NAME}:${IMAGE_TAG}
+- ${CAPTION_IMAGE_NAME}:${IMAGE_TAG}
+- ${OBJECT_IMAGE_NAME}:${IMAGE_TAG}
 
 Kubernetes Namespace: ${K8S_NAMESPACE}
                 """,
